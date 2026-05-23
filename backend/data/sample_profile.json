@@ -1,0 +1,39 @@
+{
+  "personal_info": {
+    "name": "Alex Chen",
+    "id": "student_001",
+    "major": "Computer Science",
+    "academic_year": "Junior",
+    "gpa": 3.6
+  },
+  "learning_preferences": {
+    "learning_style": "Visual",
+    "study_environment": "Quiet library or home desk",
+    "peak_study_hours": "9 AM - 12 PM and 7 PM - 10 PM",
+    "study_hours_per_day": 4,
+    "note_taking_method": "Digital notes with diagrams",
+    "break_interval_minutes": 45
+  },
+  "academic_info": {
+    "current_courses": [
+      {"name": "Data Structures & Algorithms", "credits": 4, "professor": "Dr. Smith"},
+      {"name": "Operating Systems", "credits": 3, "professor": "Dr. Johnson"},
+      {"name": "Database Systems", "credits": 3, "professor": "Dr. Liu"},
+      {"name": "Software Engineering", "credits": 3, "professor": "Prof. Garcia"}
+    ],
+    "performance": {
+      "Data Structures & Algorithms": "B+",
+      "Operating Systems": "A-",
+      "Database Systems": "B",
+      "Software Engineering": "A"
+    },
+    "strengths": ["Problem solving", "Algorithm design", "Team collaboration"],
+    "challenges": ["Time management under pressure", "Memorizing theory", "Exam anxiety"]
+  },
+  "goals": [
+    "Improve GPA to 3.8 this semester",
+    "Secure a summer internship at a tech company",
+    "Master advanced algorithms",
+    "Build a capstone project for portfolio"
+  ]
+}

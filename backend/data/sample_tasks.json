@@ -1,0 +1,58 @@
+{
+  "tasks": [
+    {
+      "id": "task001",
+      "title": "Complete Database Normalization Assignment",
+      "description": "Normalize the given ER diagram to 3NF and write SQL queries",
+      "due_date": "2026-05-27",
+      "priority": "high",
+      "course": "Database Systems",
+      "completed": false
+    },
+    {
+      "id": "task002",
+      "title": "Study for OS Midterm",
+      "description": "Review process management, memory management, and file systems",
+      "due_date": "2026-05-28",
+      "priority": "high",
+      "course": "Operating Systems",
+      "completed": false
+    },
+    {
+      "id": "task003",
+      "title": "Implement Binary Search Tree",
+      "description": "Implement BST with insert, delete, and search operations in Python",
+      "due_date": "2026-05-29",
+      "priority": "medium",
+      "course": "Data Structures & Algorithms",
+      "completed": false
+    },
+    {
+      "id": "task004",
+      "title": "Software Engineering Sprint Documentation",
+      "description": "Write sprint retrospective report and update project wiki",
+      "due_date": "2026-05-30",
+      "priority": "medium",
+      "course": "Software Engineering",
+      "completed": false
+    },
+    {
+      "id": "task005",
+      "title": "Read Chapter 7 - Graph Algorithms",
+      "description": "BFS, DFS, Dijkstra's algorithm",
+      "due_date": "2026-05-26",
+      "priority": "low",
+      "course": "Data Structures & Algorithms",
+      "completed": true
+    },
+    {
+      "id": "task006",
+      "title": "Update Resume for Internship Applications",
+      "description": "Add recent projects and update skills section",
+      "due_date": "2026-06-01",
+      "priority": "medium",
+      "course": "",
+      "completed": false
+    }
+  ]
+}
