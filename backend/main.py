@@ -17,7 +17,8 @@ import database as db
 from auth import create_token, get_current_user_id, hash_password, verify_password
 from graph import get_llm, graph
 from memory_manager import (
-    load_context_messages,
+    extract_and_store_memory,
+    load_full_context,
     maybe_summarize,
     save_assistant_message,
     save_user_message,
@@ -158,7 +159,8 @@ async def chat_stream(
     user_state = await _get_user_state_or_404(user_id)
     await save_user_message(user_id, request.message)
 
-    context_messages = await load_context_messages(user_id)
+    # L1+L2+L3: build full context (long-term recall + summary + recent msgs)
+    context_messages = await load_full_context(user_id, request.message)
     context_messages.append(HumanMessage(content=request.message))
 
     state = AcademicState(
@@ -242,6 +244,9 @@ async def chat_stream(
 
         if full_response:
             await save_assistant_message(user_id, full_response)
+            # L3: extract key facts and embed into ChromaDB
+            await extract_and_store_memory(user_id, request.message, full_response, llm)
+            # L2: compress old messages into summary if history is long
             await maybe_summarize(user_id, llm)
 
         yield {"event": "done", "data": json.dumps({"user_id": user_id})}
@@ -386,7 +391,9 @@ async def get_history(user_id: str = Depends(get_current_user_id)):
 
 @app.delete("/api/history")
 async def clear_history(user_id: str = Depends(get_current_user_id)):
+    from memory_manager import clear_long_term_memory
     await db.clear_messages(user_id)
+    await clear_long_term_memory(user_id)
     return {"status": "cleared"}
 
 
