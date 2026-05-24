@@ -3,18 +3,14 @@ import { Save, User } from 'lucide-react'
 import { getProfile, updateProfile } from '../../api/client'
 import type { StudentProfile } from '../../types'
 
-interface Props {
-  sessionId: string
-}
-
-export default function ProfilePanel({ sessionId }: Props) {
+export default function ProfilePanel() {
   const [profile, setProfile] = useState<StudentProfile>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    getProfile(sessionId).then((res) => setProfile(res.data)).catch(() => {})
-  }, [sessionId])
+    getProfile().then((res) => setProfile(res.data)).catch(() => {})
+  }, [])
 
   const set = (path: string[], value: string | number) => {
     setProfile((prev) => {
@@ -32,7 +28,7 @@ export default function ProfilePanel({ sessionId }: Props) {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateProfile(sessionId, profile)
+      await updateProfile(profile)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } finally {

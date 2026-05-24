@@ -16,11 +16,7 @@ function formatDateTime(dt: string) {
   }
 }
 
-interface Props {
-  sessionId: string
-}
-
-export default function CalendarPanel({ sessionId }: Props) {
+export default function CalendarPanel() {
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [showForm, setShowForm] = useState(false)
   const [newEvent, setNewEvent] = useState({
@@ -33,7 +29,7 @@ export default function CalendarPanel({ sessionId }: Props) {
 
   const load = async () => {
     try {
-      const res = await getCalendar(sessionId)
+      const res = await getCalendar()
       const sorted = (res.data.events ?? []).sort(
         (a, b) =>
           new Date(a.start.dateTime).getTime() - new Date(b.start.dateTime).getTime(),
@@ -46,19 +42,19 @@ export default function CalendarPanel({ sessionId }: Props) {
 
   useEffect(() => {
     load()
-  }, [sessionId])
+  }, [])
 
   const handleCreate = async () => {
     if (!newEvent.title.trim() || !newEvent.start_datetime) return
     const endDt = newEvent.end_datetime || newEvent.start_datetime
-    await addCalendarEvent(sessionId, { ...newEvent, end_datetime: endDt })
+    await addCalendarEvent({ ...newEvent, end_datetime: endDt })
     setNewEvent({ title: '', start_datetime: '', end_datetime: '', description: '', course: '' })
     setShowForm(false)
     load()
   }
 
   const handleDelete = async (id: string) => {
-    await deleteCalendarEvent(sessionId, id)
+    await deleteCalendarEvent(id)
     load()
   }
 

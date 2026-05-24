@@ -12,14 +12,12 @@ const SUGGESTED_PROMPTS = [
 ]
 
 interface Props {
-  sessionId: string
   onAgentStatusChange: (agents: AgentStatus[]) => void
   onRequiredAgentsChange: (agents: AgentName[]) => void
   onLoadingChange: (loading: boolean) => void
 }
 
 export default function Chat({
-  sessionId,
   onAgentStatusChange,
   onRequiredAgentsChange,
   onLoadingChange,
@@ -86,7 +84,7 @@ export default function Chat({
     }
 
     try {
-      for await (const { event, data } of streamChatFetch(text.trim(), sessionId)) {
+      for await (const { event, data } of streamChatFetch(text.trim())) {
         console.log('[SSE]', event, data)
         if (event === 'agent_start') {
           const agent = data.agent as AgentName
@@ -147,7 +145,7 @@ export default function Chat({
   }
 
   const handleClear = async () => {
-    await clearHistory(sessionId)
+    await clearHistory()
     setMessages([])
     resetAgentStatuses()
   }

@@ -5,88 +5,101 @@ const BASE_URL = '/api'
 
 export const api = axios.create({ baseURL: BASE_URL })
 
-// Session
-export const createSession = () => api.post<{ session_id: string }>('/session')
+// Inject auth token on every request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('atlas_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
 
-// Profile
-export const getProfile = (sessionId: string) =>
-  api.get<StudentProfile>(`/profile/${sessionId}`)
+// ── Auth ──────────────────────────────────────────────────────────────────────
 
-export const updateProfile = (sessionId: string, profile: Partial<StudentProfile>) =>
-  api.put(`/profile/${sessionId}`, { profile })
+export const register = (email: string, password: string) =>
+  api.post<{ token: string; user_id: string; email: string }>('/auth/register', {
+    email,
+    password,
+  })
 
-// Calendar
-export const getCalendar = (sessionId: string) =>
-  api.get<{ events: CalendarEvent[] }>(`/calendar/${sessionId}`)
+export const login = (email: string, password: string) =>
+  api.post<{ token: string; user_id: string; email: string }>('/auth/login', {
+    email,
+    password,
+  })
 
-export const addCalendarEvent = (
-  sessionId: string,
-  event: {
-    title: string
-    start_datetime: string
-    end_datetime: string
-    description?: string
-    course?: string
-  },
-) => api.post(`/calendar/${sessionId}/events`, event)
+export const getMe = () => api.get<{ id: string; email: string }>('/auth/me')
 
-export const deleteCalendarEvent = (sessionId: string, eventId: string) =>
-  api.delete(`/calendar/${sessionId}/events/${eventId}`)
+// ── Profile ───────────────────────────────────────────────────────────────────
 
-// Tasks
-export const getTasks = (sessionId: string) =>
-  api.get<{ tasks: Task[] }>(`/tasks/${sessionId}`)
+export const getProfile = () => api.get<StudentProfile>('/profile')
 
-export const createTask = (
-  sessionId: string,
-  task: {
-    title: string
-    description?: string
-    due_date?: string
-    priority?: string
-    course?: string
-  },
-) => api.post(`/tasks/${sessionId}`, task)
+export const updateProfile = (profile: Partial<StudentProfile>) =>
+  api.put('/profile', { profile })
 
-export const updateTask = (
-  sessionId: string,
-  taskId: string,
-  updates: Partial<Task>,
-) => api.put(`/tasks/${sessionId}/${taskId}`, updates)
+// ── Calendar ──────────────────────────────────────────────────────────────────
 
-export const deleteTask = (sessionId: string, taskId: string) =>
-  api.delete(`/tasks/${sessionId}/${taskId}`)
+export const getCalendar = () => api.get<{ events: CalendarEvent[] }>('/calendar')
 
-// History
-export const getHistory = (sessionId: string) =>
-  api.get<{ messages: Array<{ role: string; content: string }> }>(`/history/${sessionId}`)
+export const addCalendarEvent = (event: {
+  title: string
+  start_datetime: string
+  end_datetime: string
+  description?: string
+  course?: string
+}) => api.post('/calendar/events', event)
 
-export const clearHistory = (sessionId: string) =>
-  api.delete(`/history/${sessionId}`)
+export const deleteCalendarEvent = (eventId: string) =>
+  api.delete(`/calendar/events/${eventId}`)
 
-// Streaming chat — returns an EventSource
-export const streamChat = (message: string, sessionId: string): EventSource => {
-  // SSE requires GET or POST. We POST via fetch + ReadableStream (manual SSE parsing)
-  return new EventSource(`/api/chat/stream?_placeholder=1`)
-}
+// ── Tasks ─────────────────────────────────────────────────────────────────────
 
-// Manual SSE via fetch for POST requests
+export const getTasks = () => api.get<{ tasks: Task[] }>('/tasks')
+
+export const createTask = (task: {
+  title: string
+  description?: string
+  due_date?: string
+  priority?: string
+  course?: string
+}) => api.post('/tasks', task)
+
+export const updateTask = (taskId: string, updates: Partial<Task>) =>
+  api.put(`/tasks/${taskId}`, updates)
+
+export const deleteTask = (taskId: string) => api.delete(`/tasks/${taskId}`)
+
+// ── History ───────────────────────────────────────────────────────────────────
+
+export const getHistory = () =>
+  api.get<{ messages: Array<{ role: string; content: string }> }>('/history')
+
+export const clearHistory = () => api.delete('/history')
+
+// ── Streaming Chat ────────────────────────────────────────────────────────────
+
 export async function* streamChatFetch(
   message: string,
-  sessionId: string,
 ): AsyncGenerator<{ event: string; data: Record<string, unknown> }> {
+  const token = localStorage.getItem('atlas_token') ?? ''
+
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId }),
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ message }),
   })
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`${response.status}: ${text}`)
+  }
 
   if (!response.body) throw new Error('No response body')
 
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  // Declared OUTSIDE the while loop so state persists across chunk boundaries
   let currentEvent = ''
   let currentData = ''
 
@@ -99,7 +112,6 @@ export async function* streamChatFetch(
     buffer = lines.pop() ?? ''
 
     for (const line of lines) {
-      // Trim \r to handle both \n and \r\n line endings
       const trimmed = line.replace(/\r$/, '')
 
       if (trimmed.startsWith('event: ')) {

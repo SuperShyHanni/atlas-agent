@@ -9,11 +9,7 @@ const PRIORITY_COLORS = {
   low: 'text-green-700 bg-green-50 border-green-200',
 }
 
-interface Props {
-  sessionId: string
-}
-
-export default function TasksPanel({ sessionId }: Props) {
+export default function TasksPanel() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [showForm, setShowForm] = useState(false)
   const [newTask, setNewTask] = useState({
@@ -26,7 +22,7 @@ export default function TasksPanel({ sessionId }: Props) {
 
   const load = async () => {
     try {
-      const res = await getTasks(sessionId)
+      const res = await getTasks()
       setTasks(res.data.tasks ?? [])
     } catch {
       // ignore
@@ -35,23 +31,23 @@ export default function TasksPanel({ sessionId }: Props) {
 
   useEffect(() => {
     load()
-  }, [sessionId])
+  }, [])
 
   const handleCreate = async () => {
     if (!newTask.title.trim()) return
-    await createTask(sessionId, newTask)
+    await createTask(newTask)
     setNewTask({ title: '', description: '', due_date: '', priority: 'medium', course: '' })
     setShowForm(false)
     load()
   }
 
   const handleToggle = async (task: Task) => {
-    await updateTask(sessionId, task.id, { completed: !task.completed })
+    await updateTask(task.id, { completed: !task.completed })
     load()
   }
 
   const handleDelete = async (id: string) => {
-    await deleteTask(sessionId, id)
+    await deleteTask(id)
     load()
   }
 

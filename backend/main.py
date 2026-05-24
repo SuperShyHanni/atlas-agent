@@ -1,10 +1,11 @@
 import json
 import os
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
@@ -12,10 +13,25 @@ from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
 
-from graph import graph
-from state import AcademicState
+import database as db
+from auth import create_token, get_current_user_id, hash_password, verify_password
+from graph import get_llm, graph
+from memory_manager import (
+    load_context_messages,
+    maybe_summarize,
+    save_assistant_message,
+    save_user_message,
+)
+from state import AcademicState, dict_reducer
 
-app = FastAPI(title="ATLAS Academic Agent API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await db.init_db()
+    yield
+
+
+app = FastAPI(title="ATLAS Academic Agent API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,57 +41,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory session store
-sessions: Dict[str, AcademicState] = {}
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def get_or_create_session(session_id: str) -> AcademicState:
-    if session_id not in sessions:
-        sessions[session_id] = load_initial_state(session_id)
-    return sessions[session_id]
-
-
-def load_initial_state(session_id: str) -> AcademicState:
+def _load_sample_data() -> Dict:
     data_dir = os.path.join(os.path.dirname(__file__), "data")
-
-    profile = {}
-    calendar = {}
-    tasks = {}
-
-    try:
-        with open(os.path.join(data_dir, "sample_profile.json")) as f:
-            profile = json.load(f)
-    except FileNotFoundError:
-        pass
-
-    try:
-        with open(os.path.join(data_dir, "sample_calendar.json")) as f:
-            calendar = json.load(f)
-    except FileNotFoundError:
-        pass
-
-    try:
-        with open(os.path.join(data_dir, "sample_tasks.json")) as f:
-            tasks = json.load(f)
-    except FileNotFoundError:
-        pass
-
-    return AcademicState(
-        messages=[],
-        profile=profile,
-        calendar=calendar,
-        tasks=tasks,
-        results={},
-        current_agent="idle",
-        session_id=session_id,
-    )
+    result = {}
+    for key, fname in (
+        ("profile", "sample_profile.json"),
+        ("calendar", "sample_calendar.json"),
+        ("tasks", "sample_tasks.json"),
+    ):
+        try:
+            with open(os.path.join(data_dir, fname)) as f:
+                result[key] = json.load(f)
+        except FileNotFoundError:
+            result[key] = {}
+    return result
 
 
-# ─── Pydantic Models ─────────────────────────────────────────────────────────
+async def _get_user_state_or_404(user_id: str) -> Dict:
+    state = await db.get_user_state(user_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="User state not found")
+    return state
+
+
+# ── Pydantic Models ───────────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
 
 class ChatRequest(BaseModel):
     message: str
-    session_id: Optional[str] = None
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -106,20 +111,71 @@ class TaskUpdateRequest(BaseModel):
     completed: Optional[bool] = None
 
 
-# ─── Chat Endpoint (SSE Streaming) ───────────────────────────────────────────
+# ── Auth Endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/api/auth/register", status_code=status.HTTP_201_CREATED)
+async def register(req: RegisterRequest):
+    if await db.get_user_by_email(req.email):
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    user_id = str(uuid.uuid4())
+    await db.create_user(user_id, req.email, hash_password(req.password))
+
+    sample = _load_sample_data()
+    await db.upsert_user_state(
+        user_id, sample["profile"], sample["calendar"], sample["tasks"]
+    )
+
+    token = create_token(user_id)
+    return {"token": token, "user_id": user_id, "email": req.email}
+
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest):
+    user = await db.get_user_by_email(req.email)
+    if not user or not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_token(user["id"])
+    return {"token": token, "user_id": user["id"], "email": user["email"]}
+
+
+@app.get("/api/auth/me")
+async def me(user_id: str = Depends(get_current_user_id)):
+    user = await db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+# ── Chat Endpoint (SSE Streaming) ─────────────────────────────────────────────
 
 @app.post("/api/chat/stream")
-async def chat_stream(request: ChatRequest):
-    session_id = request.session_id or str(uuid.uuid4())
-    state = get_or_create_session(session_id)
-    state["messages"] = state.get("messages", []) + [HumanMessage(content=request.message)]
+async def chat_stream(
+    request: ChatRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    user_state = await _get_user_state_or_404(user_id)
+    await save_user_message(user_id, request.message)
+
+    context_messages = await load_context_messages(user_id)
+    context_messages.append(HumanMessage(content=request.message))
+
+    state = AcademicState(
+        messages=context_messages,
+        profile=user_state["profile"],
+        calendar=user_state["calendar"],
+        tasks=user_state["tasks"],
+        results={},
+        current_agent="idle",
+        session_id=user_id,
+    )
+
+    llm = get_llm()
 
     async def event_generator():
-        yield {"event": "session", "data": json.dumps({"session_id": session_id})}
-
         full_response = ""
         active_agent = None
-        # Track whether we received real streaming chunks per agent
         agent_streamed_chars: dict = {}
 
         try:
@@ -127,7 +183,9 @@ async def chat_stream(request: ChatRequest):
                 event_type = event.get("event", "")
                 node_name = event.get("name", "")
 
-                if event_type == "on_chain_start" and node_name in ("coordinator", "planner", "notewriter", "advisor"):
+                if event_type == "on_chain_start" and node_name in (
+                    "coordinator", "planner", "notewriter", "advisor"
+                ):
                     active_agent = node_name
                     agent_streamed_chars[node_name] = 0
                     yield {
@@ -140,13 +198,19 @@ async def chat_stream(request: ChatRequest):
                     if chunk and hasattr(chunk, "content") and chunk.content:
                         if active_agent and active_agent != "coordinator":
                             full_response += chunk.content
-                            agent_streamed_chars[active_agent] = agent_streamed_chars.get(active_agent, 0) + len(chunk.content)
+                            agent_streamed_chars[active_agent] = (
+                                agent_streamed_chars.get(active_agent, 0) + len(chunk.content)
+                            )
                             yield {
                                 "event": "chunk",
-                                "data": json.dumps({"content": chunk.content, "agent": active_agent}),
+                                "data": json.dumps(
+                                    {"content": chunk.content, "agent": active_agent}
+                                ),
                             }
 
-                elif event_type == "on_chain_end" and node_name in ("coordinator", "planner", "notewriter", "advisor"):
+                elif event_type == "on_chain_end" and node_name in (
+                    "coordinator", "planner", "notewriter", "advisor"
+                ):
                     output = event.get("data", {}).get("output", {})
                     results = output.get("results", {}) if isinstance(output, dict) else {}
 
@@ -159,11 +223,8 @@ async def chat_stream(request: ChatRequest):
                                 "reasoning": analysis.get("reasoning", ""),
                             }),
                         }
-
-                    # Fallback: if no streaming chunks arrived, send full response as one chunk
                     elif agent_streamed_chars.get(node_name, 0) == 0:
-                        response_key = f"{node_name}_response"
-                        text = results.get(response_key, "")
+                        text = results.get(f"{node_name}_response", "")
                         if text:
                             full_response = text
                             yield {
@@ -180,62 +241,48 @@ async def chat_stream(request: ChatRequest):
             yield {"event": "error", "data": json.dumps({"message": str(e)})}
 
         if full_response:
-            from langchain_core.messages import AIMessage
-            sessions[session_id]["messages"].append(AIMessage(content=full_response))
+            await save_assistant_message(user_id, full_response)
+            await maybe_summarize(user_id, llm)
 
-        yield {"event": "done", "data": json.dumps({"session_id": session_id})}
+        yield {"event": "done", "data": json.dumps({"user_id": user_id})}
 
     return EventSourceResponse(event_generator())
 
 
-# ─── Session ─────────────────────────────────────────────────────────────────
+# ── Profile ───────────────────────────────────────────────────────────────────
 
-@app.post("/api/session")
-async def create_session():
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = load_initial_state(session_id)
-    return {"session_id": session_id}
-
-
-@app.get("/api/session/{session_id}")
-async def get_session(session_id: str):
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    state = sessions[session_id]
-    return {
-        "session_id": session_id,
-        "message_count": len(state.get("messages", [])),
-        "has_profile": bool(state.get("profile")),
-    }
+@app.get("/api/profile")
+async def get_profile(user_id: str = Depends(get_current_user_id)):
+    state = await _get_user_state_or_404(user_id)
+    return state["profile"]
 
 
-# ─── Profile ─────────────────────────────────────────────────────────────────
-
-@app.get("/api/profile/{session_id}")
-async def get_profile(session_id: str):
-    state = get_or_create_session(session_id)
-    return state.get("profile", {})
-
-
-@app.put("/api/profile/{session_id}")
-async def update_profile(session_id: str, req: ProfileUpdateRequest):
-    state = get_or_create_session(session_id)
-    from state import dict_reducer
-    sessions[session_id]["profile"] = dict_reducer(state.get("profile", {}), req.profile)
-    return {"status": "updated", "profile": sessions[session_id]["profile"]}
+@app.put("/api/profile")
+async def update_profile(
+    req: ProfileUpdateRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    state = await _get_user_state_or_404(user_id)
+    merged = dict_reducer(state["profile"], req.profile)
+    await db.update_state_field(user_id, "profile", merged)
+    return {"status": "updated", "profile": merged}
 
 
-# ─── Calendar ────────────────────────────────────────────────────────────────
+# ── Calendar ──────────────────────────────────────────────────────────────────
 
-@app.get("/api/calendar/{session_id}")
-async def get_calendar(session_id: str):
-    state = get_or_create_session(session_id)
-    return state.get("calendar", {"events": []})
+@app.get("/api/calendar")
+async def get_calendar(user_id: str = Depends(get_current_user_id)):
+    state = await _get_user_state_or_404(user_id)
+    return state["calendar"]
 
 
-@app.post("/api/calendar/{session_id}/events")
-async def add_calendar_event(session_id: str, req: CalendarEventRequest):
-    state = get_or_create_session(session_id)
+@app.post("/api/calendar/events")
+async def add_calendar_event(
+    req: CalendarEventRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    state = await _get_user_state_or_404(user_id)
+    calendar = state["calendar"]
     event_id = str(uuid.uuid4())[:8]
     new_event = {
         "id": event_id,
@@ -245,31 +292,38 @@ async def add_calendar_event(session_id: str, req: CalendarEventRequest):
         "description": req.description,
         "course": req.course,
     }
-    if "calendar" not in sessions[session_id] or not sessions[session_id]["calendar"]:
-        sessions[session_id]["calendar"] = {"events": []}
-    sessions[session_id]["calendar"].setdefault("events", []).append(new_event)
+    calendar.setdefault("events", []).append(new_event)
+    await db.update_state_field(user_id, "calendar", calendar)
     return {"status": "created", "event": new_event}
 
 
-@app.delete("/api/calendar/{session_id}/events/{event_id}")
-async def delete_calendar_event(session_id: str, event_id: str):
-    state = get_or_create_session(session_id)
-    events = sessions[session_id].get("calendar", {}).get("events", [])
-    sessions[session_id]["calendar"]["events"] = [e for e in events if e.get("id") != event_id]
+@app.delete("/api/calendar/events/{event_id}")
+async def delete_calendar_event(
+    event_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    state = await _get_user_state_or_404(user_id)
+    calendar = state["calendar"]
+    calendar["events"] = [e for e in calendar.get("events", []) if e.get("id") != event_id]
+    await db.update_state_field(user_id, "calendar", calendar)
     return {"status": "deleted"}
 
 
-# ─── Tasks ────────────────────────────────────────────────────────────────────
+# ── Tasks ─────────────────────────────────────────────────────────────────────
 
-@app.get("/api/tasks/{session_id}")
-async def get_tasks(session_id: str):
-    state = get_or_create_session(session_id)
-    return state.get("tasks", {"tasks": []})
+@app.get("/api/tasks")
+async def get_tasks(user_id: str = Depends(get_current_user_id)):
+    state = await _get_user_state_or_404(user_id)
+    return state["tasks"]
 
 
-@app.post("/api/tasks/{session_id}")
-async def create_task(session_id: str, req: TaskRequest):
-    state = get_or_create_session(session_id)
+@app.post("/api/tasks")
+async def create_task(
+    req: TaskRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    state = await _get_user_state_or_404(user_id)
+    tasks_data = state["tasks"]
     task_id = str(uuid.uuid4())[:8]
     new_task = {
         "id": task_id,
@@ -280,17 +334,20 @@ async def create_task(session_id: str, req: TaskRequest):
         "course": req.course,
         "completed": False,
     }
-    if "tasks" not in sessions[session_id] or not sessions[session_id]["tasks"]:
-        sessions[session_id]["tasks"] = {"tasks": []}
-    sessions[session_id]["tasks"].setdefault("tasks", []).append(new_task)
+    tasks_data.setdefault("tasks", []).append(new_task)
+    await db.update_state_field(user_id, "tasks", tasks_data)
     return {"status": "created", "task": new_task}
 
 
-@app.put("/api/tasks/{session_id}/{task_id}")
-async def update_task(session_id: str, task_id: str, req: TaskUpdateRequest):
-    state = get_or_create_session(session_id)
-    tasks = sessions[session_id].get("tasks", {}).get("tasks", [])
-    for task in tasks:
+@app.put("/api/tasks/{task_id}")
+async def update_task(
+    task_id: str,
+    req: TaskUpdateRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    state = await _get_user_state_or_404(user_id)
+    tasks_data = state["tasks"]
+    for task in tasks_data.get("tasks", []):
         if task.get("id") == task_id:
             if req.title is not None:
                 task["title"] = req.title
@@ -302,42 +359,38 @@ async def update_task(session_id: str, task_id: str, req: TaskUpdateRequest):
                 task["priority"] = req.priority
             if req.completed is not None:
                 task["completed"] = req.completed
+            await db.update_state_field(user_id, "tasks", tasks_data)
             return {"status": "updated", "task": task}
     raise HTTPException(status_code=404, detail="Task not found")
 
 
-@app.delete("/api/tasks/{session_id}/{task_id}")
-async def delete_task(session_id: str, task_id: str):
-    state = get_or_create_session(session_id)
-    tasks = sessions[session_id].get("tasks", {}).get("tasks", [])
-    sessions[session_id]["tasks"]["tasks"] = [t for t in tasks if t.get("id") != task_id]
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(
+    task_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    state = await _get_user_state_or_404(user_id)
+    tasks_data = state["tasks"]
+    tasks_data["tasks"] = [t for t in tasks_data.get("tasks", []) if t.get("id") != task_id]
+    await db.update_state_field(user_id, "tasks", tasks_data)
     return {"status": "deleted"}
 
 
-# ─── History ──────────────────────────────────────────────────────────────────
+# ── History ───────────────────────────────────────────────────────────────────
 
-@app.get("/api/history/{session_id}")
-async def get_history(session_id: str):
-    state = get_or_create_session(session_id)
-    messages = state.get("messages", [])
-    return {
-        "messages": [
-            {
-                "role": "user" if m.__class__.__name__ == "HumanMessage" else "assistant",
-                "content": m.content,
-            }
-            for m in messages
-        ]
-    }
+@app.get("/api/history")
+async def get_history(user_id: str = Depends(get_current_user_id)):
+    rows = await db.get_all_messages(user_id)
+    return {"messages": [{"role": r["role"], "content": r["content"]} for r in rows]}
 
 
-@app.delete("/api/history/{session_id}")
-async def clear_history(session_id: str):
-    if session_id in sessions:
-        sessions[session_id]["messages"] = []
-        sessions[session_id]["results"] = {}
+@app.delete("/api/history")
+async def clear_history(user_id: str = Depends(get_current_user_id)):
+    await db.clear_messages(user_id)
     return {"status": "cleared"}
 
+
+# ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/health")
 async def health():

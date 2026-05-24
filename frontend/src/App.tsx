@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
+import AuthPage from './components/Auth/AuthPage'
 import Sidebar from './components/Sidebar/Sidebar'
 import Chat from './components/Chat/Chat'
 import AgentStatusPanel from './components/AgentStatus/AgentStatus'
 import type { AgentName, AgentStatus } from './types'
-import { createSession } from './api/client'
 
 const INITIAL_AGENT_STATUSES: AgentStatus[] = [
   { name: 'coordinator', status: 'idle' },
@@ -13,42 +13,46 @@ const INITIAL_AGENT_STATUSES: AgentStatus[] = [
 ]
 
 export default function App() {
-  const [sessionId, setSessionId] = useState<string>('')
+  const [token, setToken] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string>('')
   const [agentStatuses, setAgentStatuses] = useState<AgentStatus[]>(INITIAL_AGENT_STATUSES)
   const [requiredAgents, setRequiredAgents] = useState<AgentName[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
+  // Restore auth from localStorage on mount
   useEffect(() => {
-    const stored = localStorage.getItem('atlas_session_id')
-    if (stored) {
-      setSessionId(stored)
-    } else {
-      createSession().then((res) => {
-        const id = res.data.session_id
-        setSessionId(id)
-        localStorage.setItem('atlas_session_id', id)
-      })
+    const stored = localStorage.getItem('atlas_token')
+    const storedUserId = localStorage.getItem('atlas_user_id')
+    if (stored && storedUserId) {
+      setToken(stored)
+      setUserId(storedUserId)
     }
   }, [])
 
-  if (!sessionId) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-gray-50">
-        <div className="flex items-center gap-3 text-gray-500">
-          <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          Initializing ATLAS…
-        </div>
-      </div>
-    )
+  const handleAuth = (newToken: string, newUserId: string) => {
+    localStorage.setItem('atlas_token', newToken)
+    localStorage.setItem('atlas_user_id', newUserId)
+    setToken(newToken)
+    setUserId(newUserId)
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem('atlas_token')
+    localStorage.removeItem('atlas_user_id')
+    setToken(null)
+    setUserId('')
+  }
+
+  if (!token) {
+    return <AuthPage onAuth={handleAuth} />
   }
 
   return (
     <div className="h-screen flex bg-gray-50 overflow-hidden">
-      <Sidebar sessionId={sessionId} />
+      <Sidebar userId={userId} onLogout={handleLogout} />
 
       <div className="flex-1 flex flex-col min-w-0">
         <Chat
-          sessionId={sessionId}
           onAgentStatusChange={setAgentStatuses}
           onRequiredAgentsChange={setRequiredAgents}
           onLoadingChange={setIsLoading}

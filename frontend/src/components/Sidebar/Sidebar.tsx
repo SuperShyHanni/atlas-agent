@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { User, Calendar, CheckSquare, BookOpen } from 'lucide-react'
+import { User, Calendar, CheckSquare, BookOpen, LogOut } from 'lucide-react'
 import ProfilePanel from '../Profile/ProfilePanel'
 import CalendarPanel from '../Calendar/CalendarPanel'
 import TasksPanel from '../Tasks/TasksPanel'
@@ -13,23 +13,34 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 ]
 
 interface Props {
-  sessionId: string
+  userId: string
+  onLogout: () => void
 }
 
-export default function Sidebar({ sessionId }: Props) {
+export default function Sidebar({ userId, onLogout }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('profile')
 
   return (
     <div className="w-72 bg-white border-r border-gray-200 flex flex-col flex-shrink-0">
       {/* Header */}
       <div className="p-4 border-b border-gray-200">
-        <div className="flex items-center gap-2">
-          <BookOpen size={20} className="text-indigo-600" />
-          <div>
-            <h1 className="font-bold text-gray-900 text-base leading-tight">ATLAS</h1>
-            <p className="text-xs text-gray-500">Academic Learning Agent</p>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BookOpen size={20} className="text-indigo-600" />
+            <div>
+              <h1 className="font-bold text-gray-900 text-base leading-tight">ATLAS</h1>
+              <p className="text-xs text-gray-500">Academic Learning Agent</p>
+            </div>
           </div>
+          <button
+            onClick={onLogout}
+            title="Sign out"
+            className="text-gray-400 hover:text-red-500 transition-colors"
+          >
+            <LogOut size={16} />
+          </button>
         </div>
+        <p className="text-xs text-gray-400 mt-1 truncate">ID: {userId.slice(0, 8)}…</p>
       </div>
 
       {/* Tabs */}
@@ -52,9 +63,9 @@ export default function Sidebar({ sessionId }: Props) {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden p-3">
-        {activeTab === 'profile' && <ProfilePanel sessionId={sessionId} />}
-        {activeTab === 'calendar' && <CalendarPanel sessionId={sessionId} />}
-        {activeTab === 'tasks' && <TasksPanel sessionId={sessionId} />}
+        {activeTab === 'profile' && <ProfilePanel />}
+        {activeTab === 'calendar' && <CalendarPanel />}
+        {activeTab === 'tasks' && <TasksPanel />}
       </div>
     </div>
   )
