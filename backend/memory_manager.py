@@ -18,15 +18,22 @@ SUMMARIZE_TRIGGER = 30      # L2: summarize when total exceeds this
 
 # ── L3: Long-term memory ──────────────────────────────────────────────────────
 
-_EXTRACT_PROMPT = """You are extracting long-term memory facts from a student conversation.
-From the exchange below, write 1-3 short bullet points capturing durable facts about the student:
-preferences, goals, struggles, learning insights, or study habits worth remembering long-term.
-Skip generic or one-off remarks. Output only the bullet points, nothing else.
+_EXTRACT_PROMPT = """You are recording durable facts about a student for long-term memory, based ONLY on what the student explicitly stated.
 
-User: {user_msg}
-Assistant: {assistant_msg}
+Student's message: {user_msg}
+Assistant's reply (context only — do NOT extract from this): {assistant_msg}
 
-Facts (or "none" if nothing worth remembering):"""
+Rules:
+- ONLY record facts the student stated directly in their own message.
+- Do NOT infer, expand, or add any specific detail the student did not say.
+- Do NOT extract or paraphrase anything from the assistant's reply as a student fact.
+- Keep each fact close to the student's own wording; do not substitute general terms for specific ones.
+  Example: if the student says "my normalization is weak", write that — NOT "struggles with BCNF violations".
+- SKIP one-time requests, questions, or commands (e.g. "tell me X", "explain Y", "answer in 3 lines").
+  Only record self-descriptions, stated weaknesses, goals, preferences, or habits that remain true over time.
+- Output 1-3 bullet points, or the single word "none" if the student stated no durable personal facts.
+
+Student-stated facts (or "none"):"""
 
 
 async def extract_and_store_memory(
@@ -110,7 +117,12 @@ async def load_full_context(user_id: str, current_message: str) -> List:
         bullet_list = "\n".join(f"- {m}" for m in memories)
         context.append(
             SystemMessage(
-                content=f"[Long-term memory — known facts about this student]:\n{bullet_list}"
+                content=(
+                    "[Long-term memory — facts the student explicitly stated in prior sessions]:\n"
+                    f"{bullet_list}\n"
+                    "IMPORTANT: cite these facts as-is. Do not infer details not present here; "
+                    "ask the student instead."
+                )
             )
         )
 

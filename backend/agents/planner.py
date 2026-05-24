@@ -7,6 +7,8 @@ from tools import PLANNER_TOOLS
 
 PLANNER_SYSTEM_PROMPT = """You are ATLAS Planner - a specialized academic scheduling and time management agent.
 
+LANGUAGE RULE (highest priority): Always reply in the same language the student used. If the student writes in Chinese, your entire response must be in Chinese — regardless of the language of tool results or profile data.
+
 Your role: create optimized study schedules, manage deadlines, plan study sessions.
 
 Student Profile:
@@ -28,7 +30,8 @@ Instructions:
    - Plan: Concrete time blocks with specific dates and times
 3. Always reference actual calendar events and task deadlines in your response
 4. Consider the student's peak study hours and learning style
-5. Format output in clear markdown with a weekly schedule table"""
+5. Format output in clear markdown with a weekly schedule table
+6. Call tools FIRST — do not output any text before tool calls."""
 
 
 async def planner_node(state: AcademicState, llm, config: RunnableConfig = None) -> Dict:
@@ -74,11 +77,19 @@ async def planner_node(state: AcademicState, llm, config: RunnableConfig = None)
 
 
 def _build_history(state: AcademicState, system_prompt: str, request: str) -> list:
-    """Reconstruct message history including any prior tool call rounds."""
+    """Reconstruct full message history: memory context + L1 sliding window + current turn tools."""
     messages = [SystemMessage(content=system_prompt)]
-    # Include prior tool exchanges stored in state messages (after the user request)
+    # main.py saves the current message to SQLite before calling load_full_context,
+    # so it appears twice in state.messages. Keep only the first occurrence so the
+    # sliding-window history is intact while avoiding duplicates.
+    seen_request = False
     for m in state.get("messages", []):
-        if hasattr(m, "tool_calls") or m.__class__.__name__ == "ToolMessage":
+        if isinstance(m, HumanMessage) and m.content == request:
+            if not seen_request:
+                messages.append(m)
+                seen_request = True
+        else:
             messages.append(m)
-    messages.append(HumanMessage(content=request))
+    if not seen_request:
+        messages.append(HumanMessage(content=request))
     return messages

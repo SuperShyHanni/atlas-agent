@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Send, Trash2 } from 'lucide-react'
-import { streamChatFetch, clearHistory } from '../../api/client'
+import { streamChatFetch, clearHistory, getHistory } from '../../api/client'
 import type { AgentName, AgentStatus, Message } from '../../types'
 import MessageBubble from './MessageBubble'
 
@@ -28,6 +28,20 @@ export default function Chat({
   const [streamingId, setStreamingId] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    getHistory()
+      .then(({ data }) => {
+        const loaded: Message[] = data.messages.map((m, i) => ({
+          id: `history-${i}`,
+          role: m.role as Message['role'],
+          content: m.content,
+          timestamp: new Date(),
+        }))
+        setMessages(loaded)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })

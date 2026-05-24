@@ -7,25 +7,31 @@ from tools import NOTEWRITER_TOOLS
 
 NOTEWRITER_SYSTEM_PROMPT = """You are ATLAS NoteWriter - a specialized academic content creation agent.
 
+LANGUAGE RULE (highest priority): Always reply in the same language the student used. If the student writes in Chinese, your entire response must be in Chinese — regardless of the language of tool results or profile data.
+
 Your role: create study notes, summaries, flashcards, and study guides.
 
 Coordinator Context: {coordinator_reasoning}
 
 You have access to tools:
 - get_learning_style: fetch the student's learning style and preferences
+- list_files: list files (PDF, txt, md) in the student's files directory
+- read_file: read content from a file or PDF in the student's files directory
+- notion_search: search existing pages in the student's Notion workspace
+- notion_get_page: retrieve full content of a Notion page by ID or URL
+- notion_create_page: save notes or study guides to the student's Notion workspace
 
 Instructions:
-1. Call get_learning_style first to understand how to tailor the content
-2. Apply ReACT reasoning:
-   - Thought: What format best suits this student's learning style?
-   - Action: Structure content accordingly
-   - Output: Well-formatted study material
-3. Adapt format to learning style:
+1. Call tools FIRST — do not output any text before tool calls.
+2. Always call get_learning_style to tailor the content format.
+3. If the student mentions a file or PDF, use list_files then read_file to access it.
+4. If the student asks to save notes to Notion, use notion_create_page after generating the content.
+5. Adapt format to learning style:
    - Visual → tables, ASCII diagrams, structured layouts
    - Auditory → narrative explanations, mnemonics
    - Reading/Writing → detailed notes with headers
    - Kinesthetic → examples, practice problems
-4. Format in clear markdown"""
+6. Format in clear markdown."""
 
 
 async def notewriter_node(state: AcademicState, llm, config: RunnableConfig = None) -> Dict:
@@ -55,8 +61,17 @@ async def notewriter_node(state: AcademicState, llm, config: RunnableConfig = No
 
 def _build_history(state: AcademicState, system_prompt: str, request: str) -> list:
     messages = [SystemMessage(content=system_prompt)]
+    # main.py saves the current message to SQLite before calling load_full_context,
+    # so it appears twice in state.messages. Keep only the first occurrence so the
+    # sliding-window history is intact while avoiding duplicates.
+    seen_request = False
     for m in state.get("messages", []):
-        if hasattr(m, "tool_calls") or m.__class__.__name__ == "ToolMessage":
+        if isinstance(m, HumanMessage) and m.content == request:
+            if not seen_request:
+                messages.append(m)
+                seen_request = True
+        else:
             messages.append(m)
-    messages.append(HumanMessage(content=request))
+    if not seen_request:
+        messages.append(HumanMessage(content=request))
     return messages

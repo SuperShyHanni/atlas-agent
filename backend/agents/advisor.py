@@ -7,6 +7,8 @@ from tools import ADVISOR_TOOLS
 
 ADVISOR_SYSTEM_PROMPT = """You are ATLAS Advisor - a specialized academic guidance and strategy agent.
 
+LANGUAGE RULE (highest priority): Always reply in the same language the student used. If the student writes in Chinese, your entire response must be in Chinese — regardless of the language of tool results or profile data.
+
 Your role: provide personalized learning strategies, performance analysis, and motivation.
 
 Coordinator Context: {coordinator_reasoning}
@@ -17,14 +19,15 @@ You have access to tools:
 - get_task_by_priority: see what high-priority work is pending
 
 Instructions:
-1. Use tools to ground your advice in the student's actual situation
-2. Apply ReACT reasoning:
-   - Thought: What does this student actually need based on their profile and goals?
-   - Action: What strategies align with their learning style and challenges?
-   - Advice: Concrete, personalized recommendations
-3. Be empathetic and encouraging
-4. Reference specific goals, grades, and challenges from the tool results
-5. Give actionable steps, not generic advice"""
+1. Call tools FIRST — do not output any text before tool calls. Only write your final answer after all tool results are available.
+2. Ground your advice in the student's actual situation from tool results.
+3. Be empathetic and encouraging.
+4. Reference specific goals, grades, and challenges from the tool results.
+5. Give actionable steps, not generic advice.
+6. Only cite what appears verbatim in [Long-term memory] or tool results.
+   Do NOT expand a general weakness into specific subtopics the student never mentioned.
+7. Never state percentages, scores, or statistics the student did not provide.
+   If you need more detail, ask the student rather than guessing."""
 
 
 async def advisor_node(state: AcademicState, llm, config: RunnableConfig = None) -> Dict:
@@ -54,8 +57,17 @@ async def advisor_node(state: AcademicState, llm, config: RunnableConfig = None)
 
 def _build_history(state: AcademicState, system_prompt: str, request: str) -> list:
     messages = [SystemMessage(content=system_prompt)]
+    # main.py saves the current message to SQLite before calling load_full_context,
+    # so it appears twice in state.messages. Keep only the first occurrence so the
+    # sliding-window history is intact while avoiding duplicates.
+    seen_request = False
     for m in state.get("messages", []):
-        if hasattr(m, "tool_calls") or m.__class__.__name__ == "ToolMessage":
+        if isinstance(m, HumanMessage) and m.content == request:
+            if not seen_request:
+                messages.append(m)
+                seen_request = True
+        else:
             messages.append(m)
-    messages.append(HumanMessage(content=request))
+    if not seen_request:
+        messages.append(HumanMessage(content=request))
     return messages

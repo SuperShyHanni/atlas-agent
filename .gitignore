@@ -23,3 +23,7 @@ Thumbs.db
 
 # Data - sessions
 backend/data/sessions/
+
+# Runtime data
+backend/atlas.db
+backend/chroma_db/
