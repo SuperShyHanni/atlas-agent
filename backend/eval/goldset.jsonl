@@ -1,0 +1,36 @@
+{"question": "What is the running-time complexity of Dijkstra's shortest-path method?", "source": "algorithms.md", "keyword": "E log V"}
+{"question": "Which shortest-path algorithm works when some edges have negative cost?", "source": "algorithms.md", "keyword": "negative"}
+{"question": "What is the name for caching subproblem answers to speed up recursion?", "source": "algorithms.md", "keyword": "memoization"}
+{"question": "Under what condition does quicksort hit its worst-case running time?", "source": "algorithms.md", "keyword": "pivot"}
+{"question": "Which traversal goes as deep as possible before backing up?", "source": "algorithms.md", "keyword": "depth-first"}
+{"question": "Which search expands a graph one layer at a time?", "source": "algorithms.md", "keyword": "level by level"}
+{"question": "What must the left side of every dependency be under Boyce-Codd Normal Form?", "source": "databases.md", "keyword": "superkey"}
+{"question": "Which normal form removes indirect dependencies between non-key columns?", "source": "databases.md", "keyword": "transitive"}
+{"question": "How does a database survive a crash without losing committed data?", "source": "databases.md", "keyword": "write-ahead"}
+{"question": "What anomaly lets one transaction see another's uncommitted writes?", "source": "databases.md", "keyword": "dirty read"}
+{"question": "Which index structure supports equality lookups but not ranges?", "source": "databases.md", "keyword": "hash index"}
+{"question": "What kind of index lets a query be answered from the index alone?", "source": "databases.md", "keyword": "covering index"}
+{"question": "What problem occurs when a model fits the training set too closely?", "source": "machine_learning.md", "keyword": "memorizes"}
+{"question": "Which technique adds a penalty on weight magnitude to improve generalization?", "source": "machine_learning.md", "keyword": "penalizes"}
+{"question": "What optimization method steps downhill along the loss surface?", "source": "machine_learning.md", "keyword": "opposite the loss"}
+{"question": "Which metric measures how many positive predictions were right?", "source": "machine_learning.md", "keyword": "predicted positives"}
+{"question": "Which metric captures how many of the true positives were found?", "source": "machine_learning.md", "keyword": "actual positives"}
+{"question": "What maps words into continuous vectors that encode meaning?", "source": "machine_learning.md", "keyword": "dense vectors"}
+{"question": "How does TCP establish a new connection between two hosts?", "source": "networking.md", "keyword": "three-way"}
+{"question": "How does TCP avoid overwhelming the network path?", "source": "networking.md", "keyword": "congestion"}
+{"question": "Which transport protocol sends datagrams without establishing a session?", "source": "networking.md", "keyword": "connectionless"}
+{"question": "How many bits make up an IPv6 address?", "source": "networking.md", "keyword": "128"}
+{"question": "What technique allows multiple internal devices to use one public address?", "source": "networking.md", "keyword": "rewriting addresses"}
+{"question": "Why does the web rely on cookies given how HTTP works?", "source": "networking.md", "keyword": "stateless"}
+{"question": "What conditions must all hold simultaneously for a deadlock?", "source": "operating_systems.md", "keyword": "circular wait"}
+{"question": "Which primitive guarantees exclusive access to a critical section?", "source": "operating_systems.md", "keyword": "mutual exclusion"}
+{"question": "What event fires when a process touches memory not currently in RAM?", "source": "operating_systems.md", "keyword": "not resident"}
+{"question": "What hardware cache speeds up address translation?", "source": "operating_systems.md", "keyword": "lookaside"}
+{"question": "What is it called when a system spends most of its time swapping pages?", "source": "operating_systems.md", "keyword": "thrashing"}
+{"question": "Which scheduler hands every process an equal slice of CPU in turn?", "source": "operating_systems.md", "keyword": "time quantum"}
+{"question": "What random value stops attackers from using precomputed hash tables?", "source": "security.md", "keyword": "rainbow tables"}
+{"question": "What attack abuses unsanitized input to execute database commands?", "source": "security.md", "keyword": "arbitrary queries"}
+{"question": "Which web attack runs attacker scripts in another user's browser?", "source": "security.md", "keyword": "victim's browser"}
+{"question": "Which encryption type shares one key for both directions?", "source": "security.md", "keyword": "same key"}
+{"question": "Which scheme uses a pair of keys where one is shared openly?", "source": "security.md", "keyword": "key pair"}
+{"question": "Which attack forces a victim's browser to make state-changing requests?", "source": "security.md", "keyword": "authenticated requests"}

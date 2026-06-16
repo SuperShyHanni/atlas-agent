@@ -47,6 +47,25 @@ async def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS tool_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                run_id TEXT,
+                agent TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                args TEXT,
+                status TEXT NOT NULL,            -- allowed | denied | error
+                result TEXT,
+                latency_ms INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Migration for DBs created before run_id existed
+        try:
+            await db.execute("ALTER TABLE tool_audit ADD COLUMN run_id TEXT")
+        except Exception:
+            pass
         await db.commit()
 
 
@@ -188,3 +207,70 @@ async def get_latest_summary(user_id: str) -> Optional[str]:
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
+
+
+# ── Tool Audit (RBAC + traceability) ──────────────────────────────────────────
+
+async def log_tool_call(
+    user_id: str,
+    agent: str,
+    tool: str,
+    args: Dict,
+    status: str,
+    result: str,
+    latency_ms: int,
+    run_id: str = "",
+):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO tool_audit (user_id, run_id, agent, tool, args, status, result, latency_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                run_id,
+                agent,
+                tool,
+                json.dumps(args, ensure_ascii=False),
+                status,
+                (result or "")[:2000],
+                latency_ms,
+            ),
+        )
+        await db.commit()
+
+
+async def find_successful_tool_call(run_id: str, tool: str, args: Dict) -> Optional[str]:
+    """Idempotency lookup: has this exact tool+args already succeeded in this run?
+
+    Returns the prior result if so (so a resumed run can replay it without
+    re-executing a side-effecting tool), else None.
+    """
+    if not run_id:
+        return None
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT result FROM tool_audit
+            WHERE run_id = ? AND tool = ? AND args = ? AND status = 'allowed'
+            ORDER BY id ASC LIMIT 1
+            """,
+            (run_id, tool, json.dumps(args, ensure_ascii=False)),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+
+async def get_tool_audit(user_id: str, limit: int = 100) -> List[Dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT agent, tool, args, status, result, latency_ms, created_at
+            FROM tool_audit WHERE user_id = ? ORDER BY id DESC LIMIT ?
+            """,
+            (user_id, limit),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]

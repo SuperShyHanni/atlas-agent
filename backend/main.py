@@ -151,6 +151,83 @@ async def me(user_id: str = Depends(get_current_user_id)):
 
 # ── Chat Endpoint (SSE Streaming) ─────────────────────────────────────────────
 
+async def _stream_graph_run(graph_input, config, user_id, request_message, run_id):
+    """Shared SSE generator for a fresh run (graph_input=state) or a resume
+    (graph_input=None, same thread_id in config → LangGraph continues from the
+    last checkpoint). On crash/disconnect the checkpoint persists, so the client
+    can call /api/chat/resume/{run_id} to finish the run from where it stopped."""
+    llm = get_llm()
+    full_response = ""
+    active_agent = None
+    agent_streamed_chars: dict = {}
+
+    try:
+        async for event in graph.astream_events(graph_input, config=config, version="v2"):
+            event_type = event.get("event", "")
+            node_name = event.get("name", "")
+
+            if event_type == "on_chain_start" and node_name in (
+                "coordinator", "planner", "notewriter", "advisor"
+            ):
+                active_agent = node_name
+                agent_streamed_chars[node_name] = 0
+                yield {"event": "agent_start", "data": json.dumps({"agent": node_name})}
+
+            elif event_type == "on_chat_model_stream":
+                chunk = event.get("data", {}).get("chunk")
+                if chunk and hasattr(chunk, "content") and chunk.content:
+                    if active_agent and active_agent != "coordinator":
+                        full_response += chunk.content
+                        agent_streamed_chars[active_agent] = (
+                            agent_streamed_chars.get(active_agent, 0) + len(chunk.content)
+                        )
+                        yield {
+                            "event": "chunk",
+                            "data": json.dumps({"content": chunk.content, "agent": active_agent}),
+                        }
+
+            elif event_type == "on_chain_end" and node_name in (
+                "coordinator", "planner", "notewriter", "advisor"
+            ):
+                output = event.get("data", {}).get("output", {})
+                results = output.get("results", {}) if isinstance(output, dict) else {}
+
+                if node_name == "coordinator":
+                    analysis = results.get("coordinator_analysis", {})
+                    yield {
+                        "event": "coordinator_done",
+                        "data": json.dumps({
+                            "required_agents": analysis.get("required_agents", []),
+                            "reasoning": analysis.get("reasoning", ""),
+                        }),
+                    }
+                elif agent_streamed_chars.get(node_name, 0) == 0:
+                    text = results.get(f"{node_name}_response", "")
+                    if text:
+                        full_response = text
+                        yield {
+                            "event": "chunk",
+                            "data": json.dumps({"content": text, "agent": node_name}),
+                        }
+
+                yield {"event": "agent_end", "data": json.dumps({"agent": node_name})}
+
+    except Exception as e:
+        # Checkpoint is intact; surface run_id so the client can resume this run.
+        yield {
+            "event": "error",
+            "data": json.dumps({"message": str(e), "run_id": run_id, "resumable": True}),
+        }
+        return
+
+    if full_response:
+        await save_assistant_message(user_id, full_response)
+        await extract_and_store_memory(user_id, request_message, full_response, llm)
+        await maybe_summarize(user_id, llm)
+
+    yield {"event": "done", "data": json.dumps({"user_id": user_id, "run_id": run_id})}
+
+
 @app.post("/api/chat/stream")
 async def chat_stream(
     request: ChatRequest,
@@ -163,6 +240,11 @@ async def chat_stream(
     context_messages = await load_full_context(user_id, request.message)
     context_messages.append(HumanMessage(content=request.message))
 
+    # Per-run checkpoint thread — isolates resume state from the long-term memory
+    # system, which already manages cross-turn context via load_full_context.
+    run_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": f"{user_id}:{run_id}"}}
+
     state = AcademicState(
         messages=context_messages,
         profile=user_state["profile"],
@@ -171,87 +253,36 @@ async def chat_stream(
         results={},
         current_agent="idle",
         session_id=user_id,
+        run_id=run_id,
     )
 
-    llm = get_llm()
+    return EventSourceResponse(
+        _stream_graph_run(state, config, user_id, request.message, run_id)
+    )
 
-    async def event_generator():
-        full_response = ""
-        active_agent = None
-        agent_streamed_chars: dict = {}
 
-        try:
-            async for event in graph.astream_events(state, version="v2"):
-                event_type = event.get("event", "")
-                node_name = event.get("name", "")
+@app.post("/api/chat/resume/{run_id}")
+async def chat_resume(
+    run_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Resume a previously crashed/disconnected run from its last checkpoint."""
+    config = {"configurable": {"thread_id": f"{user_id}:{run_id}"}}
 
-                if event_type == "on_chain_start" and node_name in (
-                    "coordinator", "planner", "notewriter", "advisor"
-                ):
-                    active_agent = node_name
-                    agent_streamed_chars[node_name] = 0
-                    yield {
-                        "event": "agent_start",
-                        "data": json.dumps({"agent": node_name}),
-                    }
+    snapshot = await graph.aget_state(config)
+    if not snapshot or not snapshot.created_at:
+        raise HTTPException(status_code=404, detail="No resumable run found for this id")
+    if not snapshot.next:
+        raise HTTPException(status_code=409, detail="Run already completed")
 
-                elif event_type == "on_chat_model_stream":
-                    chunk = event.get("data", {}).get("chunk")
-                    if chunk and hasattr(chunk, "content") and chunk.content:
-                        if active_agent and active_agent != "coordinator":
-                            full_response += chunk.content
-                            agent_streamed_chars[active_agent] = (
-                                agent_streamed_chars.get(active_agent, 0) + len(chunk.content)
-                            )
-                            yield {
-                                "event": "chunk",
-                                "data": json.dumps(
-                                    {"content": chunk.content, "agent": active_agent}
-                                ),
-                            }
+    # Recover the original request message for memory extraction after resume.
+    rows = await db.get_all_messages(user_id)
+    last_user = next((r["content"] for r in reversed(rows) if r["role"] == "user"), "")
 
-                elif event_type == "on_chain_end" and node_name in (
-                    "coordinator", "planner", "notewriter", "advisor"
-                ):
-                    output = event.get("data", {}).get("output", {})
-                    results = output.get("results", {}) if isinstance(output, dict) else {}
-
-                    if node_name == "coordinator":
-                        analysis = results.get("coordinator_analysis", {})
-                        yield {
-                            "event": "coordinator_done",
-                            "data": json.dumps({
-                                "required_agents": analysis.get("required_agents", []),
-                                "reasoning": analysis.get("reasoning", ""),
-                            }),
-                        }
-                    elif agent_streamed_chars.get(node_name, 0) == 0:
-                        text = results.get(f"{node_name}_response", "")
-                        if text:
-                            full_response = text
-                            yield {
-                                "event": "chunk",
-                                "data": json.dumps({"content": text, "agent": node_name}),
-                            }
-
-                    yield {
-                        "event": "agent_end",
-                        "data": json.dumps({"agent": node_name}),
-                    }
-
-        except Exception as e:
-            yield {"event": "error", "data": json.dumps({"message": str(e)})}
-
-        if full_response:
-            await save_assistant_message(user_id, full_response)
-            # L3: extract key facts and embed into ChromaDB
-            await extract_and_store_memory(user_id, request.message, full_response, llm)
-            # L2: compress old messages into summary if history is long
-            await maybe_summarize(user_id, llm)
-
-        yield {"event": "done", "data": json.dumps({"user_id": user_id})}
-
-    return EventSourceResponse(event_generator())
+    # input=None → LangGraph continues the existing thread from its last checkpoint.
+    return EventSourceResponse(
+        _stream_graph_run(None, config, user_id, last_user, run_id)
+    )
 
 
 # ── Profile ───────────────────────────────────────────────────────────────────
@@ -395,6 +426,53 @@ async def clear_history(user_id: str = Depends(get_current_user_id)):
     await db.clear_messages(user_id)
     await clear_long_term_memory(user_id)
     return {"status": "cleared"}
+
+
+# ── Documents (RAG) ───────────────────────────────────────────────────────────
+
+class IngestRequest(BaseModel):
+    filename: str
+
+
+@app.post("/api/documents/ingest")
+async def ingest_document(
+    req: IngestRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Chunk + embed a file from the student's FILES_DIR into the RAG store."""
+    from rag import ingest_file
+    result = ingest_file(user_id, req.filename)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/api/documents")
+async def list_documents(user_id: str = Depends(get_current_user_id)):
+    from vector_store import list_document_sources
+    return {"sources": list_document_sources(user_id)}
+
+
+@app.delete("/api/documents")
+async def delete_documents(
+    source: str = "",
+    user_id: str = Depends(get_current_user_id),
+):
+    from vector_store import delete_user_documents
+    delete_user_documents(user_id, source=source)
+    return {"status": "deleted", "source": source or "all"}
+
+
+# ── Tool Audit (RBAC trace) ───────────────────────────────────────────────────
+
+@app.get("/api/audit/tools")
+async def get_tool_audit(
+    limit: int = 100,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Return this user's tool-call audit trail (allowed/denied/error), newest first."""
+    rows = await db.get_tool_audit(user_id, limit=min(limit, 500))
+    return {"audit": rows}
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

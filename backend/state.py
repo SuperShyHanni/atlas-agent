@@ -25,3 +25,4 @@ class AcademicState(TypedDict):
     results: Annotated[Dict[str, Any], dict_reducer]
     current_agent: str
     session_id: str
+    run_id: str  # unique per chat run — used as checkpoint thread suffix + tool idempotency key

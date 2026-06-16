@@ -1,10 +1,7 @@
 from langchain_core.tools import tool
 
-_current_state = {}
-
-def set_state(state: dict):
-    global _current_state
-    _current_state = state
+# Per-request state is injected via an async-safe ContextVar (see tools/context.py).
+from .context import get_state, set_state  # noqa: F401  (set_state re-exported for graph.py)
 
 
 @tool
@@ -13,7 +10,7 @@ def get_learning_style() -> str:
     Get the student's learning style and study preferences.
     Use this to tailor advice and study materials to the student.
     """
-    profile = _current_state.get("profile", {})
+    profile = get_state().get("profile", {})
     prefs = profile.get("learning_preferences", {})
     personal = profile.get("personal_info", {})
 
@@ -37,7 +34,7 @@ def get_student_goals() -> str:
     Get the student's academic goals and current performance.
     Use this to align advice with what the student is trying to achieve.
     """
-    profile = _current_state.get("profile", {})
+    profile = get_state().get("profile", {})
     goals = profile.get("goals", [])
     performance = profile.get("academic_info", {}).get("performance", {})
     challenges = profile.get("academic_info", {}).get("challenges", [])

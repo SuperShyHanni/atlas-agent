@@ -3,7 +3,6 @@ from typing import Callable
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import ToolNode
 
 from state import AcademicState
 from agents.coordinator import coordinator_node
@@ -11,9 +10,10 @@ from agents.planner import planner_node
 from agents.notewriter import notewriter_node
 from agents.advisor import advisor_node
 from tools import PLANNER_TOOLS, NOTEWRITER_TOOLS, ADVISOR_TOOLS
-import tools.calendar_tools as cal_mod
-import tools.task_tools as task_mod
-import tools.profile_tools as profile_mod
+from tools.context import set_state as set_tool_state
+from rbac import make_guarded_tool_node
+from checkpointer import SqliteCheckpointer
+from database import DB_PATH
 
 
 def get_llm() -> ChatOpenAI:
@@ -26,10 +26,9 @@ def get_llm() -> ChatOpenAI:
 
 
 def inject_state_into_tools(state: AcademicState):
-    """Inject current session state into tool modules so tools can read live data."""
-    cal_mod.set_state(state)
-    task_mod.set_state(state)
-    profile_mod.set_state(state)
+    """Inject current session state into an async-safe ContextVar so tools read
+    live data scoped to *this* request only (no cross-session leakage)."""
+    set_tool_state(state)
 
 
 def route_after_coordinator(state: AcademicState) -> str:
@@ -59,7 +58,9 @@ def build_graph():
     llm = get_llm()
 
     all_tools = list({t.name: t for t in PLANNER_TOOLS + NOTEWRITER_TOOLS + ADVISOR_TOOLS}.values())
-    tool_node = ToolNode(all_tools)
+    # RBAC + audit enforcement happens inside this node (see rbac.py); the prior
+    # ToolNode executed any tool for any agent with no authorization or trace.
+    tool_node = make_guarded_tool_node(all_tools)
 
     builder = StateGraph(AcademicState)
 
@@ -95,7 +96,10 @@ def build_graph():
         {"planner": "planner", "notewriter": "notewriter", "advisor": "advisor"},
     )
 
-    return builder.compile()
+    # Checkpointer snapshots the full state after every node, so a long ReAct run
+    # that crashes/disconnects mid-chain can resume from the last completed node.
+    checkpointer = SqliteCheckpointer(DB_PATH)
+    return builder.compile(checkpointer=checkpointer)
 
 
 graph = build_graph()

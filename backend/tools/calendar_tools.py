@@ -2,12 +2,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from langchain_core.tools import tool
 
-# Module-level state reference — set by graph.py before each request
-_current_state = {}
-
-def set_state(state: dict):
-    global _current_state
-    _current_state = state
+# Per-request state is injected via an async-safe ContextVar (see tools/context.py).
+from .context import get_state, set_state  # noqa: F401  (set_state re-exported for graph.py)
 
 
 @tool
@@ -20,7 +16,7 @@ def search_calendar(keyword: str = "", days_ahead: int = 7) -> str:
         keyword: Optional keyword to filter events by title or course name
         days_ahead: How many days ahead to search (default 7)
     """
-    events = _current_state.get("calendar", {}).get("events", [])
+    events = get_state().get("calendar", {}).get("events", [])
     if not events:
         return "No calendar events found."
 
@@ -55,8 +51,9 @@ def get_upcoming_deadlines(days_ahead: int = 7) -> str:
     Args:
         days_ahead: How many days ahead to look (default 7)
     """
-    tasks = _current_state.get("tasks", {}).get("tasks", [])
-    events = _current_state.get("calendar", {}).get("events", [])
+    state = get_state()
+    tasks = state.get("tasks", {}).get("tasks", [])
+    events = state.get("calendar", {}).get("events", [])
 
     now = datetime.now(timezone.utc).date()
     deadlines = []

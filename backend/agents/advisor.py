@@ -17,6 +17,7 @@ You have access to tools:
 - get_learning_style: fetch learning preferences and study habits
 - get_student_goals: fetch academic goals, grades, and challenges
 - get_task_by_priority: see what high-priority work is pending
+- search_documents: semantic search over the student's own materials; returns relevant passages with [source p.X] citations — use it to ground advice in their actual content
 
 Instructions:
 1. Call tools FIRST — do not output any text before tool calls. Only write your final answer after all tool results are available.
