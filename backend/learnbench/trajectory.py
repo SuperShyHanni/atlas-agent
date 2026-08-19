@@ -18,6 +18,7 @@ class TrajectoryStep:
     action: dict = field(default_factory=dict)
     result: dict = field(default_factory=dict)
     reward: dict = field(default_factory=dict)
+    error: dict | None = None  # set when the step failed (invalid action / policy error)
 
 
 @dataclass
@@ -49,6 +50,7 @@ class Trajectory:
                 action=step.get("action", {}),
                 result=step.get("result", {}),
                 reward=step.get("reward", {}),
+                error=step.get("error"),
             )
             for step in data.get("steps", [])
         ]
